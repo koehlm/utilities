@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+#-----------------------------------------------------------------------------------
+#
+#   checkmd5 utility
+#
+#   Compares the MD5 hash for a given file, compatible with Linux and macOS.
+#
+#   The MD5 hash needs to have been generated using one of the following commands:
+#     md5sum binary_file > ref_file.md5   (Linux)
+#     md5 -q binary_file > ref_file.md5   (macOS)
+#
+#   Marcus Koehler, ECMWF
+#
+#-----------------------------------------------------------------------------------
+
+usage() {
+    cat >&2 <<EOF
+
+Usage: $(basename "$0") ref_file.md5 binary_file
+
+Compares the MD5 hash of a given binary file with a reference MD5 file.
+
+Arguments:
+  ref_file.md5    File containing an MD5 hash, generated using:
+                  md5sum binary_file > ref_file.md5   (Linux)
+                  md5 -q binary_file > ref_file.md5   (macOS)
+  binary_file     The binary file to check against the reference hash.
+
+Method:
+  For an existing binary file, poo.tgz, generate first a reference 
+  file containing the MD5 hash:
+  md5sum poo.tgz > poo.md5
+  Now disseminate both files (poo.tgz and poo.md5) to another user, 
+  e.g. via download.
+  The other user can then verify the integrity of the received binary 
+  file by using the checkmd5 utility:
+  checkmd5 poo.md5 poo.tgz
+  The result will be reported either as success (matching hashes) 
+  or as failure (no match).
+
+Exit Codes:
+  0  Success (hashes match)
+  1  Incorrect usage or hash mismatch
+  2  File not found
+  3  Invalid MD5 hash format
+  4  No suitable MD5 command found
+
+EOF
+    exit 1
+}
+
+# Check if user requested help
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    usage
+fi
+
+detect_md5_command() {
+    # checks for availability of md5sum command on Linux, or md5 command on MacOS
+    if command -v md5sum &>/dev/null; then
+        MD5_CMD="md5sum"
+    elif [[ "$(uname)" == "Darwin" ]] && command -v md5 &>/dev/null; then
+        MD5_CMD="md5 -q"
+    else
+        echo -e "\n\e[91mERROR: No suitable MD5 command found (md5sum or md5).\e[39m"
+        exit 4
+    fi
+}
+
+checkmd5() {
+    # checks for existence of binary file, generates hash from binary file,
+    # compares generated hash with reference hash, and reports results
+    local md5_to_test="$1"
+    local file="$2"
+
+    if [[ ! -f "$file" ]]; then
+        echo -e "\n\e[91mERROR: File '$file' does not exist.\e[39m"
+        exit 2
+    fi
+
+    local md5_from_file
+    if [[ "$MD5_CMD" == "md5sum" ]]; then
+        md5_from_file=$($MD5_CMD "$file" | awk '{print $1}')
+    else
+        md5_from_file=$($MD5_CMD "$file")
+    fi
+
+    local md5_results="Reference hash:    $md5_to_test\nBinary file hash:  $md5_from_file"
+
+    if [[ "$md5_to_test" == "$md5_from_file" ]]; then
+        echo -e "\n\e[92mSUCCESS - found matching hash\e[39m\n\n$md5_results\n"
+        exit 0
+    else
+        echo -e "\n\e[91mFAILURE - hash not matching\e[39m\n\n$md5_results\n"
+        exit 1
+    fi
+}
+
+#-- ensure correct number of arguments
+if [[ $# -ne 2 ]]; then
+    usage
+fi
+
+#-- detect the correct MD5 command (Linux/macOS)
+detect_md5_command
+
+# Validate reference file existence
+if [[ ! -f "$1" ]]; then
+    echo -e "\n\e[91mERROR: Reference file '$1' not found.\e[39m"
+    exit 2
+fi
+
+#-- extract MD5 hash from reference file
+md5_reference=$(awk '{print $1}' "$1")
+
+# ensure reference file is not empty
+if [[ -z "$md5_reference" ]]; then
+    echo -e "\n\e[91mERROR: Reference file '$1' is empty or invalid.\e[39m"
+    exit 3
+fi
+
+#-- validate extracted MD5 hash format
+if ! [[ "$md5_reference" =~ ^[a-fA-F0-9]{32}$ ]]; then
+    echo -e "\n\e[91mERROR: Invalid MD5 hash format in '$1'.\e[39m"
+    exit 3
+fi
+
+#-- call function to check MD5
+checkmd5 "$md5_reference" "$2"
+
