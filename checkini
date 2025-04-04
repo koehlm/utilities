@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+#-----------------------------------------------------------------------------------
+#
+#   checkini utility
+#
+#   Obtains information from OpenIFS initial experiment data
+#
+#   This utility needs to be run inside an OpenIFS experiment directory
+#
+#   Marcus Koehler, ECMWF
+#
+#-----------------------------------------------------------------------------------
+
+usage() {
+    cat >&2 <<EOF
+
+Usage: $(basename "$0")
+
+Obtains information from OpenIFS initial experiment data
+
+Arguments:
+  None required
+
+Method:
+  Change into an OpenIFS experiment directory and run this utility
+
+EOF
+    exit 1
+}
+
+# Check if user requested help
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    usage
+fi
+
+detect_grib_tools() {
+    # checks for availability of ecCodes 
+    if command -v grib_ls >/dev/null 2>&1 && command -v grib_get >/dev/null 2>&1; then
+        version=$(grib_ls -V)
+        echo -e "\n$(basename $0) using ${version#"${version%%[!$'\n']*}"}\n"
+    else
+        echo -e "\n❌ ERROR: checkini did not find ecCodes tools grib_ls and grib_get." >&2
+        echo -e "          Make sure the ecCodes package command line tools are available.\n" >&2
+        exit 2
+    fi
+}
+
+find_init_files() {
+    # checks if initial experiment files can be found
+    shfile=""
+    ggfile=""
+    clfile=""
+
+    for file in ICMSH*INIT ICMGG*INIT ICMCL*INIT; do
+        [[ "$file" == "ICMSH*INIT" || "$file" == "ICMCL*INIT" || "$file" == "ICMGG*INIT" ]] && continue
+
+        if [[ -f "$file" ]]; then
+            [[ -z "$shfile" && "$file" == ICMSH*INIT ]] && shfile="$file"
+            [[ -z "$ggfile" && "$file" == ICMGG*INIT ]] && ggfile="$file"
+            [[ -z "$clfile" && "$file" == ICMCL*INIT ]] && clfile="$file"
+        fi
+
+        [[ -n "$shfile" && -n "$clfile" && -n "$ggfile" ]] && break
+    done
+
+    if [[ -n "$shfile" ]]; then
+        echo "checking ${shfile} ..."
+        expver=$(grib_get -p experimentVersionNumber -w count=1 "${shfile}")
+    else
+        echo "No SH file found"
+        expver="(not found)"
+    fi
+
+    if [[ -n "$ggfile" ]]; then
+        echo "checking ${ggfile} ..."
+    else
+        echo "No GG file found"
+    fi
+
+    if [[ -n "$clfile" ]]; then
+        echo "checking ${clfile} ..."
+    else
+        echo "No CL file found"
+    fi
+
+    if [[ -z "$shfile" && -z "$clfile" && -z "$ggfile" ]]; then
+        echo "❌ ERROR: No OpenIFS initial experiment data could be found!" >&2
+        echo -e "          At least one matching SH, GG or CL INIT file is required.\n" >&2
+        exit 1
+    fi
+}
+
+get_ini_info() {
+    # retrieves information from the initial experiment data
+    echo -e "\nexpver:    "$expver
+
+    startdate=$(grib_get -w count=1 -p dataDate "${shfile}")
+    starttime=$(grib_get -w count=1 -p dataTime "${shfile}")
+    starttime=$(printf "%02d" "$starttime")
+    echo "startDate: ${startdate}  ${starttime} utc"
+
+    oct=$(grib_get -w count=1 -p isOctahedral "${ggfile}")
+    gridType=$(grib_get -w count=1 -p gridType "${clfile}")
+    gridName=$(grib_get -w count=1 -p gridName "${clfile}")
+    if [ "$oct" = 1 ]; then
+      echo "gridType:  ${gridName} cubic octahedral ${gridType} Gaussian grid (_4)"
+      prefix='TCo'
+    elif [ "$oct" = 0 ]; then
+      if [[ "${gridType}" == "reduced_gg" ]]; then
+        echo "gridType:  ${gridName} linear ${gridType} Gaussian grid (l_2)"
+        prefix='TL'
+      elif [[ "${gridType}" == "regular_gg" ]]; then
+        echo "gridType:  ${gridName} ${gridType} Gaussian grid (full)"
+        prefix='T'
+      fi
+    else
+      echo "❌ ERROR: unknown grid type.\n" >&2
+      exit 1
+    fi
+
+    resol=$(grib_get -w count=1 -p J "${shfile}")
+    echo "resol:     ${prefix}${resol}"
+
+    levels=$(grib_ls -w shortName=vo "${shfile}" | grep vo | wc -l)
+    echo "levels:    "$levels
+
+    sstlen=$(grib_ls -w shortName=stl1 ${clfile} | grep stl1 | wc -l)
+    echo "sstlen:    ${sstlen} days"
+    echo
+}
+
+detect_grib_tools
+
+find_init_files
+
+get_ini_info
